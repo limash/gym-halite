@@ -1,3 +1,5 @@
+from abc import ABC
+
 import gym
 from gym import spaces
 
@@ -11,8 +13,7 @@ ACTION_NAMES = {0: 'NORTH',
                 2: 'WEST',
                 3: 'EAST'}
 
-
-class HaliteEnv(gym.Env):
+class HaliteEnv(gym.Env, ABC):
     metadata = {'render.modes': ['human']}
 
     def __init__(self, debug=False):
@@ -24,9 +25,13 @@ class HaliteEnv(gym.Env):
 
         obs = self._trainer.reset()
         board = hh.Board(obs, self._env.configuration)
-        obs_size = get_data_for_ship(board, '0-1').shape[0]
+        scalar_features_size = get_data_for_ship(board).shape[0]
+        halite_map_size = get_halite_map(board).shape
         self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
-        self.observation_space = spaces.Box(low=-1, high=50, shape=(obs_size,), dtype=np.float32)
+        self.observation_space = spaces.Tuple((
+            spaces.Box(low=-1, high=50, shape=halite_map_size, dtype=np.float32),
+            spaces.Box(low=-1, high=50, shape=(scalar_features_size,), dtype=np.float32)
+        ))
 
     def reset(self):
         # returns time_step
@@ -35,9 +40,9 @@ class HaliteEnv(gym.Env):
         self._current_ship = board.ships['0-1']
         if self._is_debug:
             print(board)
-        state = get_data_for_ship(board, '0-1')
-        # state = tf.convert_to_tensor(state, dtype=tf.float32)
-        # state = tf.expand_dims(state, 0)
+        skalar_features = get_data_for_ship(board)
+        halite_map = get_halite_map(board)
+        state = halite_map, skalar_features
         # self._episode_ended = False
         return state
 
@@ -58,14 +63,13 @@ class HaliteEnv(gym.Env):
 
         obs, _, done, info = self._trainer.step(actions)
         next_board = hh.Board(obs, self._env.configuration)
-        state = get_data_for_ship(next_board, '0-1')
-        # state = tf.convert_to_tensor(state, dtype=tf.float32)
-        # state = tf.expand_dims(state, 0)
+        skalar_features = get_data_for_ship(next_board)
+        halite_map = get_halite_map(next_board)
+        state = halite_map, skalar_features
 
         # we pass next_board and current_ship to find this ship on the next
         # board and calculate a reward
         reward = get_ship_reward(next_board, self._current_ship)
-        # reward = tf.convert_to_tensor(reward, dtype=tf.float32)
         self._current_ship = next_board.ships['0-1']
 
         if self._is_debug:
@@ -86,7 +90,6 @@ class HaliteEnv(gym.Env):
         #     self._episode_ended = True
         return state, reward, done, info
 
-
 def get_ship_reward(next_board, ship, action=None):
     reward = 0
     no_shipyards_penalty = 0
@@ -101,9 +104,9 @@ def get_ship_reward(next_board, ship, action=None):
                 if next_ship.position == shipyard.position:
                     shipyard_position = True
         if shipyard_position:
-            reward += ship.halite / 100  # /2
+            reward += ship.halite / 1000  # /2
         else:
-            reward += (next_ship.halite - ship.halite) / 100  # /2
+            reward += (next_ship.halite - ship.halite) / 1000  # /2
     # if there is not the ship
     except KeyError:
         # it is converted
@@ -127,7 +130,6 @@ def get_ship_reward(next_board, ship, action=None):
     final_reward = reward + no_shipyards_penalty + lost_penalty
     return np.array(final_reward, dtype=np.float32)
 
-
 def digitize_action(action):
     if action < -0.6:
         action_number = 0
@@ -141,9 +143,8 @@ def digitize_action(action):
         action_number = 4
     return action_number
 
-
 def get_ship_observation_vector(board, current_ship_id):
-    player_id = board.current_player.id
+    # player_id = board.current_player.id
     board_side = board.configuration.size
 
     # a vector
@@ -179,11 +180,62 @@ def get_ship_observation_vector(board, current_ship_id):
     A[i + 4], A[i + 5] = (current_cell[0] - 10) / 21, (current_cell[1] - 10) / 21
     return A
 
+def get_halite_map(board):
+    """
+    Return a square array of halite map
+    """
+    board_side = board.configuration.size
+    A = np.zeros((board_side, board_side), dtype=np.float32)
+    for point, cell in board.cells.items():
+        A[point.x, point.y] = cell.halite / 1000
+    return A
 
-def get_data_for_ship(board, ship_id):
-    A = get_ship_observation_vector(board, ship_id)
+def get_ship_observation_maps(board, current_ship_id):
+    """
+    Return an array of size (1+2*players_count, board_side, board_side)
+    with information about halite, ships, and shipyards
+    """
+    player_id = board.current_player.id
+    board_side = board.configuration.size
+    players_count = len(board.players)
+
+    # we need several boards for the all features
+    # one board for a halite map
+    # one board for a current ship
+    # two boards for each player for: ships, shipyards
+    # (without the current ship for the current player)
+    A = np.zeros((1 + 1 + 2 * players_count, board_side, board_side),
+                 dtype=np.float32)
+
+    for point, cell in board.cells.items():
+        # A[0, ...] - halite map layer, with rescaling to 0.x
+        A[0, point.x, point.y] = cell.halite / 1000
+        # A[1, ...] - the current ship position
+        if (cell.ship and
+                cell.ship.player_id == player_id and
+                cell.ship_id == current_ship_id):
+            A[1, point.x, point.y] = (cell.ship.halite + 500) / 1000
+        # A[2, ...] - player ships map, ship costs 0.5 (500 before rescaling)
+        elif cell.ship and cell.ship.player_id == player_id:
+            A[2, point.x, point.y] = (cell.ship.halite + 500) / 1000
+        # A[3, ...] - player shipyards map
+        if cell.shipyard and cell.shipyard.player_id == player_id:
+            # shipyard costs 1
+            A[3, point.x, point.y] = 1
+        # a pairs of maps of each opponent
+        for opponent in board.opponents:
+            id = 1 + 1 + 2 * opponent.id
+            if cell.ship and cell.ship.player_id == opponent.id:
+                A[id, point.x, point.y] = (cell.ship.halite + 500) / 1000
+            if cell.shipyard and cell.shipyard.player_id == opponent.id:
+                A[id + 1, point.x, point.y] = 1
+    return A
+
+def get_data_for_ship(board):
+    # A = get_ship_observation_vector(board, ship_id)
     # flatten the array
-    B = A.flatten()
+    # B = A.flatten()
+    B = np.array([], dtype=np.float32)
 
     # add to the data info about the current scores and a time step
     opponents_halite = np.array([])
