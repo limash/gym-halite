@@ -25,7 +25,7 @@ class HaliteEnv(gym.Env, ABC):
 
         obs = self._trainer.reset()
         board = hh.Board(obs, self._env.configuration)
-        scalar_features_size = get_data_for_ship(board).shape[0]
+        scalar_features_size = get_data_for_ship(board).shape
         halite_map_size = get_halite_map(board).shape
         # if halite map has one layer (2d), we need to add a dimension
         # since, for example, keras conv2d anticipates 3d arrays
@@ -40,7 +40,7 @@ class HaliteEnv(gym.Env, ABC):
             # each cell has no more than 500 halite, rescale it to 0-1
             spaces.Box(low=0, high=1, shape=halite_map_size, dtype=np.float32),
             # (x, y, ship's halite, overall halite, time)
-            spaces.Box(low=0, high=1, shape=(scalar_features_size,), dtype=np.float32)
+            spaces.Box(low=0, high=1, shape=scalar_features_size, dtype=np.float32)
         ))
 
     def reset(self):
