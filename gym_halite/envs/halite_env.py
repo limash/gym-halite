@@ -29,8 +29,9 @@ class HaliteEnv(gym.Env, ABC):
         halite_map_size = get_halite_map(board).shape
         # if halite map has one layer (2d), we need to add a dimension
         # since, for example, keras conv2d anticipates 3d arrays
-        if len(halite_map_size) == 2:
-            halite_map_size = (*halite_map_size, 1)
+        # if len(halite_map_size) == 2:
+        #     self._halite_map_size_two = True
+        #     halite_map_size = (*halite_map_size, 1)
 
         self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
         self.observation_space = spaces.Tuple((
@@ -51,6 +52,8 @@ class HaliteEnv(gym.Env, ABC):
             print(board)
         skalar_features = get_data_for_ship(board)
         halite_map = get_halite_map(board)
+        # if self._halite_map_size_two:
+        #     halite_map = halite_map[:, np.newaxis]
         state = halite_map, skalar_features
         # self._episode_ended = False
         return state
@@ -74,6 +77,8 @@ class HaliteEnv(gym.Env, ABC):
         next_board = hh.Board(obs, self._env.configuration)
         skalar_features = get_data_for_ship(next_board)
         halite_map = get_halite_map(next_board)
+        # if self._halite_map_size_two:
+        #     halite_map = halite_map[:, np.newaxis]
         state = halite_map, skalar_features
 
         # we pass next_board and current_ship to find this ship on the next
@@ -198,6 +203,7 @@ def get_halite_map(board):
     for point, cell in board.cells.items():
         # the maximum amount of halite in a cell is 500
         A[point.x, point.y] = cell.halite/500
+    A = A[..., np.newaxis]
     return A
 
 def get_ship_observation_maps(board, current_ship_id):
