@@ -7,5 +7,6 @@ def show_gym():
     for _ in range(10):
         env.step(env.action_space.sample())  # take a random action
 
+
 if __name__ == '__main__':
     show_gym()
