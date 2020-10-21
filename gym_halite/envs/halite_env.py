@@ -29,13 +29,17 @@ class HaliteEnv(gym.Env, ABC):
         board = hh.Board(obs, self._env.configuration)
         scalar_features_size = get_data_for_ship(board).shape
         halite_map_size = get_halite_map(board).shape
+
         # if halite map has one layer (2d), we need to add a dimension
         # since, for example, keras conv2d anticipates 3d arrays
         # if len(halite_map_size) == 2:
         #     self._halite_map_size_two = True
         #     halite_map_size = (*halite_map_size, 1)
 
-        self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
+        # self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
+        # four sides for movements plus idleness
+        self.action_space = spaces.Discrete(5)
+
         # self.observation_space = spaces.Tuple((
         #     spaces.Box(low=0, high=1, shape=halite_map_size, dtype=np.float32),
         #     spaces.Box(low=0, high=1, shape=scalar_features_size, dtype=np.float32)
@@ -65,7 +69,8 @@ class HaliteEnv(gym.Env, ABC):
 
     def step(self, action):
         # action is np.float32 from -1 to 1
-        action_number = digitize_action(action)
+        # action_number = digitize_action(action)
+        action_number = action
 
         # if self._episode_ended:
         #     # The last action ended the episode. Ignore the current action
@@ -172,7 +177,7 @@ def get_ship_observation_vector(board, current_ship_id):
     # a vector
     A = np.zeros((board_side * board_side * 4 + 2,), dtype=np.float32)
 
-    # a packs of 4 entries for each cell
+    # a pack of 4 entries for each cell
     for i, key in enumerate(board.cells):
         cell = board.cells[key]
         i = 4 * i
