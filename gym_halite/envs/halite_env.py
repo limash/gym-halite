@@ -22,7 +22,12 @@ class HaliteEnv(gym.Env, ABC):
         self._current_ship = None
         self._is_debug = debug
         # self._episode_ended = False
-        self._env = make('halite', debug=True)
+        self._board_size = 5
+        self._starting_halite = 5000
+        self._env = make('halite',
+                         configuration={"size": self._board_size,
+                                        "startingHalite": self._starting_halite},
+                         debug=True)
         self._trainer = self._env.train([None])
         obs = self._trainer.reset()
 
@@ -42,13 +47,16 @@ class HaliteEnv(gym.Env, ABC):
              "scalar_features": spaces.Box(low=0,
                                            high=1,
                                            shape=scalar_features_size,
-                                           dtype=np.float32)}
+                                           dtype=np.int32)}
         ))
 
     def reset(self):
         # returns time_step
         # let's make a new environment so agent can study new halite location
-        self._env = make('halite', debug=True)
+        self._env = make('halite',
+                         configuration={"size": self._board_size,
+                                        "startingHalite": self._starting_halite},
+                         debug=True)
         self._trainer = self._env.train([None])
         obs = self._trainer.reset()
         board = hh.Board(obs, self._env.configuration)
@@ -112,7 +120,8 @@ def get_scalar_features(board):
         return np.fliplr(reversed_order)
 
     # transform coordinates to binary arrays
-    m = 5  # the maximum order, so coordinates no more than 31
+    m = 5  # the number of positions in a binary number,
+    # 5 is enough for up to 31 decimal, 32 is 2^5
     d = np.array([x, y])
     result = to_binary(m, d)
     A = np.append(A, result[0, :])
@@ -148,6 +157,8 @@ def get_halite_map(board):
     for point, cell in board.cells.items():
         # the maximum amount of halite in a cell is 500
         A[point.x, point.y] = cell.halite / 500
+    # when initializing there can be more than 500 halite in some cells
+    A = np.where(A > 1, 1, A)
     A = A[..., np.newaxis]
     return A
 
@@ -161,14 +172,15 @@ def get_ship_reward(next_board, ship, action=None):
     # first, try to find the ship in the next board
     try:
         next_ship = next_board.ships[ship.id]
-        if next_board.current_player.shipyards is not None:
-            for shipyard in next_board.current_player.shipyards:
-                if next_ship.position == shipyard.position:
-                    shipyard_position = True
-        if shipyard_position:
-            reward += ship.halite
-        else:
-            reward += (next_ship.halite - ship.halite)
+        # if next_board.current_player.shipyards is not None:
+        #     for shipyard in next_board.current_player.shipyards:
+        #         if next_ship.position == shipyard.position:
+        #             shipyard_position = True
+        # if shipyard_position:
+        #     reward += ship.halite
+        # else:
+        #     reward += (next_ship.halite - ship.halite)
+        reward += (next_ship.halite - ship.halite)
     # if there is not the ship
     except KeyError:
         # it is converted
@@ -189,8 +201,12 @@ def get_ship_reward(next_board, ship, action=None):
         #                  for opponent in next_board.opponents]).max()
         # if diff > 0:
         #     lost_penalty = (-1 - diff/1000) * next_board.step/400
+    # the maximum posiible reward should be 125 (0.25*500)
+    # but during initialization there can be more than 500 halite in a cell
+    reward = reward/125
+    reward = 1 if reward > 1 else reward
     final_reward = reward + no_shipyards_penalty + lost_penalty
-    return np.array(final_reward, dtype=np.int32)
+    return np.array(final_reward, dtype=np.float32)
 
 
 def get_feature_maps(board, current_ship_id):
