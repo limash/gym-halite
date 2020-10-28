@@ -47,7 +47,7 @@ class HaliteEnv(gym.Env, ABC):
              "scalar_features": spaces.Box(low=0,
                                            high=1,
                                            shape=scalar_features_size,
-                                           dtype=np.int32)}
+                                           dtype=np.float32)}
         ))
 
     def reset(self):
