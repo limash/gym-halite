@@ -24,58 +24,46 @@ class HaliteEnv(gym.Env, ABC):
         # self._episode_ended = False
         self._env = make('halite', debug=True)
         self._trainer = self._env.train([None])
-
         obs = self._trainer.reset()
+
         board = hh.Board(obs, self._env.configuration)
-        scalar_features_size = get_data_for_ship(board).shape
+        scalar_features_size = get_scalar_features(board).shape
         halite_map_size = get_halite_map(board).shape
 
-        # if halite map has one layer (2d), we need to add a dimension
-        # since, for example, keras conv2d anticipates 3d arrays
-        # if len(halite_map_size) == 2:
-        #     self._halite_map_size_two = True
-        #     halite_map_size = (*halite_map_size, 1)
-
-        # self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
         # four sides for movements plus idleness
         self.action_space = spaces.Discrete(5)
 
-        # self.observation_space = spaces.Tuple((
-        #     spaces.Box(low=0, high=1, shape=halite_map_size, dtype=np.float32),
-        #     spaces.Box(low=0, high=1, shape=scalar_features_size, dtype=np.float32)
-        # ))
         self.observation_space = spaces.Dict(OrderedDict(
             # for the simplest case with only 1 ship and no shipyards and enemies
             # there is only a halite map of size 21x21
             # each cell has no more than 500 halite, rescale it to 0-1
             {"halite_map": spaces.Box(low=0, high=1, shape=halite_map_size, dtype=np.float32),
              # (x, y, ship's halite, overall halite, time)
-             "scalar_features": spaces.Box(low=0, high=1, shape=scalar_features_size, dtype=np.float32)}
+             "scalar_features": spaces.Box(low=0,
+                                           high=1,
+                                           shape=scalar_features_size,
+                                           dtype=np.float32)}
         ))
 
     def reset(self):
         # returns time_step
+        # let's make a new environment so agent can study new halite location
+        self._env = make('halite', debug=True)
+        self._trainer = self._env.train([None])
         obs = self._trainer.reset()
         board = hh.Board(obs, self._env.configuration)
         self._current_ship = board.ships['0-1']
         if self._is_debug:
             print(board)
-        skalar_features = get_data_for_ship(board)
+        scalar_features = get_scalar_features(board)
         halite_map = get_halite_map(board)
         # if self._halite_map_size_two:
         #     halite_map = halite_map[:, np.newaxis]
         # self._episode_ended = False
-        return OrderedDict({"halite_map": halite_map, "scalar_features": skalar_features})
+        return OrderedDict({"halite_map": halite_map, "scalar_features": scalar_features})
 
     def step(self, action):
-        # action is np.float32 from -1 to 1
-        # action_number = digitize_action(action)
         action_number = action
-
-        # if self._episode_ended:
-        #     # The last action ended the episode. Ignore the current action
-        #     # and start a new episode.
-        #     return self.reset()
 
         actions = {}
         try:
@@ -85,10 +73,8 @@ class HaliteEnv(gym.Env, ABC):
 
         obs, _, done, info = self._trainer.step(actions)
         next_board = hh.Board(obs, self._env.configuration)
-        skalar_features = get_data_for_ship(next_board)
+        skalar_features = get_scalar_features(next_board)
         halite_map = get_halite_map(next_board)
-        # if self._halite_map_size_two:
-        #     halite_map = halite_map[:, np.newaxis]
         state = OrderedDict({"halite_map": halite_map, "scalar_features": skalar_features})
 
         # we pass next_board and current_ship to find this ship on the next
@@ -113,6 +99,57 @@ class HaliteEnv(gym.Env, ABC):
         # if done:
         #     self._episode_ended = True
         return state, reward, done, info
+
+
+def get_scalar_features(board):
+    A = np.array([], dtype=np.float32)
+    x, y = board.ships['0-1'].position
+
+    def to_binary(m, d):
+        # m is a number of positions in a binary number
+        # d is an array of numbers to convert to binary
+        reversed_order = ((d[:, None] & (1 << np.arange(m))) > 0).astype(int)
+        return np.fliplr(reversed_order)
+
+    # transform coordinates to binary arrays
+    m = 5  # the maximum order, so coordinates no more than 31
+    d = np.array([x, y])
+    result = to_binary(m, d)
+    A = np.append(A, result[0, :])
+    A = np.append(A, result[1, :])
+
+    # an upper bound of a ship's current halite is
+    # 500 * 0.25 (mining step quota) * 400 (number of steps)
+    # 50000 is the upper bound for a ship, it is 224*224 approximately
+    # thus, square root a number of halite and divide by 224 to be in (0, 1)
+    # A = np.append(A, np.sqrt(board.ships['0-1'].halite) / 224)
+
+    # add to the data info about the current scores and a time step
+    # opponents_halite = np.array([])
+    # for opponent in board.opponents:
+    #     opponents_halite = np.append(opponents_halite, opponent.halite)
+
+    # for example, 4 ships gather 200000 in total, it will be an upper bound,
+    # it is 448*448 approximately
+    # so to make a total halite from 0 to 1 we can square root a total halite and divide by 448
+    # B = np.append(A, np.sqrt(board.current_player.halite) / 448)
+    # B = np.append(B, np.sqrt(opponents_halite) / 448)
+    # the maximum amount of steps is 400
+    # B = np.append(B, board.step / 400)
+    return A
+
+
+def get_halite_map(board):
+    """
+    Return a square array of halite map
+    """
+    board_side = board.configuration.size
+    A = np.zeros((board_side, board_side), dtype=np.float32)
+    for point, cell in board.cells.items():
+        # the maximum amount of halite in a cell is 500
+        A[point.x, point.y] = cell.halite / 500
+    A = A[..., np.newaxis]
+    return A
 
 
 def get_ship_reward(next_board, ship, action=None):
@@ -156,72 +193,7 @@ def get_ship_reward(next_board, ship, action=None):
     return np.array(final_reward, dtype=np.int32)
 
 
-def digitize_action(action):
-    if action < -0.6:
-        action_number = 0  # north
-    elif -0.6 <= action < -0.2:
-        action_number = 1  # south
-    elif -0.2 <= action < 0.2:
-        action_number = 2  # west
-    elif 0.2 <= action < 0.6:
-        action_number = 3  # east
-    elif 0.6 <= action:
-        action_number = 4  # stay
-    return action_number
-
-
-def get_ship_observation_vector(board, current_ship_id):
-    # player_id = board.current_player.id
-    board_side = board.configuration.size
-
-    # a vector
-    A = np.zeros((board_side * board_side * 4 + 2,), dtype=np.float32)
-
-    # a pack of 4 entries for each cell
-    for i, key in enumerate(board.cells):
-        cell = board.cells[key]
-        i = 4 * i
-        # halite - from 0 to 500
-        # make it 0 to 0.5
-        A[i] = cell.halite / 1000
-        if cell.ship is not None:
-            # whom this ship belongs to (id) - 0 to 3 (0 is the player)
-            # lets skip zero make it negative from -0.1 to -0.4
-            A[i + 1] = -(cell.ship.player_id + 1) / 10
-            # its halite - from 0 to inf
-            # reduce 1000 times
-            A[i + 2] = cell.ship.halite / 1000
-            if current_ship_id == cell.ship_id:
-                current_cell = cell.position
-        else:
-            # no ship in the current cell = 0
-            A[i + 1] = 0
-        if cell.shipyard is not None:
-            # whom this shipyard belongs to
-            # again, make it negative from -1.1 to -1.4
-            A[i + 3] = -(cell.shipyard.player_id + 1) / 10 - 1
-        else:
-            A[i + 3] = 0
-
-    # add position of the current ship
-    A[i + 4], A[i + 5] = (current_cell[0] - 10) / 21, (current_cell[1] - 10) / 21
-    return A
-
-
-def get_halite_map(board):
-    """
-    Return a square array of halite map
-    """
-    board_side = board.configuration.size
-    A = np.zeros((board_side, board_side), dtype=np.float32)
-    for point, cell in board.cells.items():
-        # the maximum amount of halite in a cell is 500
-        A[point.x, point.y] = cell.halite / 500
-    A = A[..., np.newaxis]
-    return A
-
-
-def get_ship_observation_maps(board, current_ship_id):
+def get_feature_maps(board, current_ship_id):
     """
     Return an array of size (1+2*players_count, board_side, board_side)
     with information about halite, ships, and shipyards
@@ -261,32 +233,3 @@ def get_ship_observation_maps(board, current_ship_id):
             if cell.shipyard and cell.shipyard.player_id == opponent.id:
                 A[id + 1, point.x, point.y] = 1
     return A
-
-
-def get_data_for_ship(board):
-    # A = get_ship_observation_vector(board, ship_id)
-    # flatten the array
-    # B = A.flatten()
-    B = np.array([], dtype=np.float32)
-    x, y = board.ships['0-1'].position
-    # normalize coordinates to be in (0, 1)
-    x, y = (x - 10) / 21, (y - 10) / 21
-    B = np.append(B, x)
-    B = np.append(B, y)
-    # an upper bound of a ship's current halite is 500 * 0.25 (mining step quota) * 400 (number of steps)
-    # 50000 is the upper bound for a ship, it is 224*224 approximately
-    # thus, square root a number of halite and divide by 224 to be in (0, 1)
-    B = np.append(B, np.sqrt(board.ships['0-1'].halite) / 224)
-
-    # add to the data info about the current scores and a time step
-    opponents_halite = np.array([])
-    for opponent in board.opponents:
-        opponents_halite = np.append(opponents_halite, opponent.halite)
-
-    # for example, 4 ships gather 200000 in total, it will be an upper bound, it is 448*448 approximately
-    # so to make a total halite from 0 to 1 we can square root a total halite and divide by 448
-    C = np.append(B, np.sqrt(board.current_player.halite) / 448)
-    C = np.append(C, np.sqrt(opponents_halite) / 448)
-    # the maximum amount of steps is 400
-    C = np.append(C, board.step / 400)
-    return C
