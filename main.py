@@ -3,7 +3,7 @@ import time
 
 
 def show_gym(number_of_iterations):
-    env = gym.make('gym_halite:halite-v0', debug=False)
+    env = gym.make('gym_halite:halite-v0', is_action_continuous=True, debug=True)
     for i in range(number_of_iterations):
         t0 = time.time()
         env.reset()

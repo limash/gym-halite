@@ -18,9 +18,10 @@ ACTION_NAMES = {0: 'NORTH',
 class HaliteEnv(gym.Env, ABC):
     metadata = {'render.modes': ['human']}
 
-    def __init__(self, debug=False):
+    def __init__(self, is_action_continuous=False, debug=False):
         self._current_ship = None
         self._is_debug = debug
+        self._is_act_continuous = is_action_continuous
         # self._episode_ended = False
         self._board_size = 5
         self._starting_halite = 5000
@@ -36,7 +37,10 @@ class HaliteEnv(gym.Env, ABC):
         halite_map_size = get_halite_map(board).shape
 
         # four sides for movements plus idleness
-        self.action_space = spaces.Discrete(5)
+        if self._is_act_continuous:
+            self.action_space = spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
+        else:
+            self.action_space = spaces.Discrete(5)
 
         self.observation_space = spaces.Dict(OrderedDict(
             # for the simplest case with only 1 ship and no shipyards and enemies
@@ -71,7 +75,10 @@ class HaliteEnv(gym.Env, ABC):
         return OrderedDict({"halite_map": halite_map, "scalar_features": scalar_features})
 
     def step(self, action):
-        action_number = action
+        if self._is_act_continuous:
+            action_number = digitize_action(action)
+        else:
+            action_number = action
 
         actions = {}
         try:
@@ -81,9 +88,9 @@ class HaliteEnv(gym.Env, ABC):
 
         obs, _, done, info = self._trainer.step(actions)
         next_board = hh.Board(obs, self._env.configuration)
-        skalar_features = get_scalar_features(next_board)
+        scalar_features = get_scalar_features(next_board)
         halite_map = get_halite_map(next_board)
-        state = OrderedDict({"halite_map": halite_map, "scalar_features": skalar_features})
+        state = OrderedDict({"halite_map": halite_map, "scalar_features": scalar_features})
 
         # we pass next_board and current_ship to find this ship on the next
         # board and calculate a reward
@@ -103,10 +110,25 @@ class HaliteEnv(gym.Env, ABC):
                 halite_new = 'no (it was destroyed of converted)'
             print(f"ship has {halite_new} halite")
             print(f"ship reward is {reward}")
+            print(f"coordinates are {scalar_features}")
 
         # if done:
         #     self._episode_ended = True
         return state, reward, done, info
+
+
+def digitize_action(action):
+    if action < -0.6:
+        action_number = 0  # north
+    elif -0.6 <= action < -0.2:
+        action_number = 1  # south
+    elif -0.2 <= action < 0.2:
+        action_number = 2  # west
+    elif 0.2 <= action < 0.6:
+        action_number = 3  # east
+    elif 0.6 <= action:
+        action_number = 4  # stay
+    return action_number
 
 
 def get_scalar_features(board):
