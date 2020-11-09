@@ -34,7 +34,7 @@ class HaliteEnv(gym.Env, ABC):
 
         board = hh.Board(obs, self._env.configuration)
         scalar_features_size = get_scalar_features(board).shape
-        halite_map_size = get_halite_map(board).shape
+        feature_maps_size = get_feature_maps(board).shape
 
         # four sides for movements plus idleness
         if self._is_act_continuous:
@@ -46,7 +46,7 @@ class HaliteEnv(gym.Env, ABC):
             # for the simplest case with only 1 ship and no shipyards and enemies
             # there is only a halite map of size 21x21
             # each cell has no more than 500 halite, rescale it to 0-1
-            {"halite_map": spaces.Box(low=0, high=1, shape=halite_map_size, dtype=np.float32),
+            {"feature_maps": spaces.Box(low=0, high=1, shape=feature_maps_size, dtype=np.float32),
              # (x, y, ship's halite, overall halite, time)
              "scalar_features": spaces.Box(low=0,
                                            high=1,
@@ -68,11 +68,11 @@ class HaliteEnv(gym.Env, ABC):
         if self._is_debug:
             print(board)
         scalar_features = get_scalar_features(board)
-        halite_map = get_halite_map(board)
-        # if self._halite_map_size_two:
-        #     halite_map = halite_map[:, np.newaxis]
+        feature_maps = get_feature_maps(board)
+        # if self._feature_maps_size_two:
+        #     feature_maps = feature_maps[:, np.newaxis]
         # self._episode_ended = False
-        return OrderedDict({"halite_map": halite_map, "scalar_features": scalar_features})
+        return OrderedDict({"feature_maps": feature_maps, "scalar_features": scalar_features})
 
     def step(self, action):
         if self._is_act_continuous:
@@ -89,8 +89,8 @@ class HaliteEnv(gym.Env, ABC):
         obs, _, done, info = self._trainer.step(actions)
         next_board = hh.Board(obs, self._env.configuration)
         scalar_features = get_scalar_features(next_board)
-        halite_map = get_halite_map(next_board)
-        state = OrderedDict({"halite_map": halite_map, "scalar_features": scalar_features})
+        feature_maps = get_feature_maps(next_board)
+        state = OrderedDict({"feature_maps": feature_maps, "scalar_features": scalar_features})
 
         # we pass next_board and current_ship to find this ship on the next
         # board and calculate a reward
@@ -149,11 +149,13 @@ def get_scalar_features(board):
     A = np.append(A, result[0, :])
     A = np.append(A, result[1, :])
 
+    # the current ship halite =: (0, 1)
     # an upper bound of a ship's current halite is
     # 500 * 0.25 (mining step quota) * 400 (number of steps)
     # 50000 is the upper bound for a ship, it is 224*224 approximately
     # thus, square root a number of halite and divide by 224 to be in (0, 1)
-    # A = np.append(A, np.sqrt(board.ships['0-1'].halite) / 224)
+    A = np.append(A, np.sqrt(board.ships['0-1'].halite) / 224)
+    A = np.where(A > 1, 1, A)
 
     # add to the data info about the current scores and a time step
     # opponents_halite = np.array([])
@@ -172,7 +174,7 @@ def get_scalar_features(board):
 
 def get_halite_map(board):
     """
-    Return a square array of halite map
+    Return an array of halite map [1, x, y]
     """
     board_side = board.configuration.size
     A = np.zeros((board_side, board_side), dtype=np.float32)
@@ -182,6 +184,35 @@ def get_halite_map(board):
     # when initializing there can be more than 500 halite in some cells
     A = np.where(A > 1, 1, A)
     A = A[..., np.newaxis]
+    return A
+
+
+def get_feature_maps(board):
+    """
+    Return an array of size (3, board_side, board_side)
+    with information about halite and ships
+    """
+    board_side = board.configuration.size
+
+    # we need several boards for the all features
+    # one board for a halite map
+    # plus two boards for ships and their halite
+    # summary, for each cell:
+    # [ halite,
+    #   is ship,
+    #   halite in the ship]
+    A = np.zeros((1 + 2, board_side, board_side), dtype=np.float32)
+
+    for point, cell in board.cells.items():
+        # A[0, ...] - halite map layer, with rescaling to 0.x
+        A[0, point.x, point.y] = cell.halite / 500
+        # A[1, ...] - the current ship position
+        if cell.ship is not None:
+            A[1, point.x, point.y] = 1
+            # see get_scalar_features
+            A[2, point.x, point.y] = np.sqrt(cell.ship.halite) / 224
+
+    A = np.where(A > 1, 1, A)
     return A
 
 
@@ -229,45 +260,3 @@ def get_ship_reward(next_board, ship, action=None):
     reward = 1 if reward > 1 else reward
     final_reward = reward + no_shipyards_penalty + lost_penalty
     return np.array(final_reward, dtype=np.float32)
-
-
-def get_feature_maps(board, current_ship_id):
-    """
-    Return an array of size (1+2*players_count, board_side, board_side)
-    with information about halite, ships, and shipyards
-    """
-    player_id = board.current_player.id
-    board_side = board.configuration.size
-    players_count = len(board.players)
-
-    # we need several boards for the all features
-    # one board for a halite map
-    # one board for a current ship
-    # two boards for each player for: ships, shipyards
-    # (without the current ship for the current player)
-    A = np.zeros((1 + 1 + 2 * players_count, board_side, board_side),
-                 dtype=np.float32)
-
-    for point, cell in board.cells.items():
-        # A[0, ...] - halite map layer, with rescaling to 0.x
-        A[0, point.x, point.y] = cell.halite / 1000
-        # A[1, ...] - the current ship position
-        if (cell.ship and
-                cell.ship.player_id == player_id and
-                cell.ship_id == current_ship_id):
-            A[1, point.x, point.y] = (cell.ship.halite + 500) / 1000
-        # A[2, ...] - player ships map, ship costs 0.5 (500 before rescaling)
-        elif cell.ship and cell.ship.player_id == player_id:
-            A[2, point.x, point.y] = (cell.ship.halite + 500) / 1000
-        # A[3, ...] - player shipyards map
-        if cell.shipyard and cell.shipyard.player_id == player_id:
-            # shipyard costs 1
-            A[3, point.x, point.y] = 1
-        # a pairs of maps of each opponent
-        for opponent in board.opponents:
-            id = 1 + 1 + 2 * opponent.id
-            if cell.ship and cell.ship.player_id == opponent.id:
-                A[id, point.x, point.y] = (cell.ship.halite + 500) / 1000
-            if cell.shipyard and cell.shipyard.player_id == opponent.id:
-                A[id + 1, point.x, point.y] = 1
-    return A

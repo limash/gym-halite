@@ -3,12 +3,13 @@ import time
 
 
 def show_gym(number_of_iterations):
-    env = gym.make('gym_halite:halite-v0', is_action_continuous=True, debug=True)
+    env = gym.make('gym_halite:halite-v0', is_action_continuous=False, debug=True)
     for i in range(number_of_iterations):
         t0 = time.time()
         env.reset()
         for step in range(399):
             state, reward, done, info = env.step(env.action_space.sample())  # take a random action
+            # state, reward, done, info = env.step(4)  # 4 is idleness
             if done: break
         t1 = time.time()
         print(f"A number of steps is {step+1}")
