@@ -201,16 +201,16 @@ def get_feature_maps(board):
     # [ halite,
     #   is ship,
     #   halite in the ship]
-    A = np.zeros((1 + 2, board_side, board_side), dtype=np.float32)
+    A = np.zeros((board_side, board_side, 1 + 2), dtype=np.float32)
 
     for point, cell in board.cells.items():
         # A[0, ...] - halite map layer, with rescaling to 0.x
-        A[0, point.x, point.y] = cell.halite / 500
+        A[point.x, point.y, 0] = cell.halite / 500
         # A[1, ...] - the current ship position
         if cell.ship is not None:
-            A[1, point.x, point.y] = 1
+            A[point.x, point.y, 1] = 1
             # see get_scalar_features
-            A[2, point.x, point.y] = np.sqrt(cell.ship.halite) / 224
+            A[point.x, point.y, 2] = np.sqrt(cell.ship.halite) / 224
 
     A = np.where(A > 1, 1, A)
     return A
